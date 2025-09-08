@@ -1,0 +1,203 @@
+# Default values for openprime-postgres.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: postgres
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "15-alpine"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 999
+  runAsNonRoot: true
+  runAsUser: 999
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 999
+
+service:
+  type: ClusterIP
+  port: 5432
+  targetPort: 5432
+
+ingress:
+  enabled: false
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - openprime-postgres
+        topologyKey: kubernetes.io/hostname
+
+# PostgreSQL specific configuration
+postgresql:
+  # Database configuration
+  database: "postgres"
+  username: "postgres"
+  # Default databases to create
+  databases:
+    - name: "openprime"
+      owner: "openprime_user"
+    - name: "keycloak"
+      owner: "keycloak_user"
+  
+  # Users to create
+  users:
+    - name: "openprime_user"
+      password: "openprime123"
+      database: "openprime"
+    - name: "keycloak_user"
+      password: "keycloak123"
+      database: "keycloak"
+
+  # PostgreSQL configuration parameters
+  config:
+    max_connections: "200"
+    shared_buffers: "256MB"
+    effective_cache_size: "1GB"
+    maintenance_work_mem: "64MB"
+    checkpoint_completion_target: "0.9"
+    wal_buffers: "16MB"
+    default_statistics_target: "100"
+    random_page_cost: "1.1"
+    effective_io_concurrency: "200"
+
+# Secrets (should be provided via external secret management)
+auth:
+  postgresPassword: "postgres"
+
+# Persistent storage
+persistence:
+  enabled: true
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  mountPath: /var/lib/postgresql/data
+
+# Init scripts
+initdb:
+  enabled: true
+  # Scripts to run during database initialization
+  scripts:
+    # Create databases and users
+    01-init-databases.sh: |
+      #!/bin/bash
+      set -e
+      
+      # Create openprime database and user
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+        CREATE DATABASE openprime;
+        CREATE USER openprime_user WITH PASSWORD 'openprime123';
+        GRANT ALL PRIVILEGES ON DATABASE openprime TO openprime_user;
+        ALTER USER openprime_user CREATEDB;
+      EOSQL
+      
+      # Create keycloak database and user with proper permissions
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+        CREATE DATABASE keycloak;
+        CREATE USER keycloak_user WITH PASSWORD 'keycloak123';
+        GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak_user;
+        ALTER USER keycloak_user CREATEDB;
+      EOSQL
+      
+      # Connect to keycloak database and grant schema permissions
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "keycloak" <<-EOSQL
+        GRANT ALL ON SCHEMA public TO keycloak_user;
+        GRANT CREATE ON SCHEMA public TO keycloak_user;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO keycloak_user;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO keycloak_user;
+      EOSQL
+      
+      # Connect to openprime database and grant schema permissions  
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "openprime" <<-EOSQL
+        GRANT ALL ON SCHEMA public TO openprime_user;
+        GRANT CREATE ON SCHEMA public TO openprime_user;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO openprime_user;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO openprime_user;
+      EOSQL
+
+# Health check configuration
+healthCheck:
+  enabled: true
+  livenessProbe:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - exec pg_isready -U postgres -d postgres -h 127.0.0.1 -p 5432
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  readinessProbe:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - exec pg_isready -U postgres -d postgres -h 127.0.0.1 -p 5432
+        - exec pg_isready -U postgres -d openprime -h 127.0.0.1 -p 5432
+        - exec pg_isready -U postgres -d keycloak -h 127.0.0.1 -p 5432
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Network policies
+networkPolicy:
+  enabled: false
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openprime-app-backend
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openprime-keycloak
+  egress: []
