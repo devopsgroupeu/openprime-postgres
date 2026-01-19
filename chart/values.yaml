@@ -110,6 +110,12 @@ postgresql:
 
 # Secrets (should be provided via external secret management)
 auth:
+  # Use existing secret instead of creating one
+  # If set, the chart will not create a secret and will use this one instead
+  existingSecret: ""
+  # Key in the existing secret containing the postgres password
+  secretKey: "postgres-password"
+  # Password to use if existingSecret is not set (not recommended for production)
   postgresPassword: "postgres"
 
 # Persistent storage

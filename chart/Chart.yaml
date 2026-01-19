@@ -2,7 +2,7 @@ apiVersion: v2
 name: openprime-postgres
 description: PostgreSQL database for OpenPrime infrastructure management platform
 type: application
-version: 0.2.0
+version: 0.3.0
 appVersion: "15.8"
 home: https://www.postgresql.org/
 sources:

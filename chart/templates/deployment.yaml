@@ -43,8 +43,8 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "openprime-postgres.fullname" . }}-auth
-                  key: postgres-password
+                  name: {{ .Values.auth.existingSecret | default (printf "%s-auth" (include "openprime-postgres.fullname" .)) }}
+                  key: {{ .Values.auth.secretKey | default "postgres-password" }}
             - name: PGDATA
               value: {{ .Values.persistence.mountPath }}/pgdata
             {{- range $key, $value := .Values.postgresql.config }}
