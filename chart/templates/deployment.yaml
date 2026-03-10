@@ -27,6 +27,18 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: {{ .Chart.Name }}
+          {{- if .Values.auth.autoSyncPasswords }}
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    until pg_isready -h localhost -U postgres; do sleep 2; done
+                    psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "ALTER USER openprime_user WITH PASSWORD '$OPENPRIME_USER_PASSWORD';"
+                    psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "ALTER USER keycloak_user WITH PASSWORD '$KEYCLOAK_USER_PASSWORD';"
+          {{- end }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -40,11 +52,50 @@ spec:
               value: {{ .Values.postgresql.database }}
             - name: POSTGRES_USER
               value: {{ .Values.postgresql.username }}
+            
+            {{- /* 1. Main Postgres Password Logic */ -}}
+            {{- if .Values.auth.existingSecret }}
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.auth.existingSecret | default (printf "%s-auth" (include "openprime-postgres.fullname" .)) }}
-                  key: {{ .Values.auth.secretKey | default "postgres-password" }}
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.secretKeys.postgresPassword | default "postgres-password" }}
+            {{- else if .Values.auth.secrets.postgresPassword }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "openprime-postgres.fullname" . }}-auth
+                  key: postgres-password
+            {{- else }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.auth.postgresPassword | quote }}
+            {{- end }}
+
+            {{- /* 2. Application User Passwords (for init script) */ -}}
+            {{- if .Values.auth.existingSecret }}
+            - name: OPENPRIME_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.secretKeys.openprimePassword | default "openprime-user-password" }}
+            - name: KEYCLOAK_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.secretKeys.keycloakPassword | default "keycloak-user-password" }}
+            {{- else if .Values.auth.secrets.openprimePassword }}
+            - name: OPENPRIME_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "openprime-postgres.fullname" . }}-auth
+                  key: openprime-user-password
+            - name: KEYCLOAK_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "openprime-postgres.fullname" . }}-auth
+                  key: keycloak-user-password
+            {{- end }}
+
             - name: PGDATA
               value: {{ .Values.persistence.mountPath }}/pgdata
             {{- range $key, $value := .Values.postgresql.config }}
