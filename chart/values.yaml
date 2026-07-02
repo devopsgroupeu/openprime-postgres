@@ -4,6 +4,14 @@
 
 replicaCount: 1
 
+# Pod Disruption Budget - disabled by default. Postgres runs as a single
+# stateful replica here, so enable this only as maxUnavailable: 0 to protect the
+# pod from voluntary eviction (node drains then require manual maintenance), or
+# switch to an HA operator (CloudNativePG) before using minAvailable.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
 image:
   repository: postgres
   pullPolicy: IfNotPresent
