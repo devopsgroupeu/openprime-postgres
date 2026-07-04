@@ -123,6 +123,13 @@ auth:
   existingSecret: ""
   # Key in the existing secret containing the postgres password
   secretKey: "postgres-password"
+  # Keys within existingSecret for each database's password. Must be defined so
+  # the deployment template can reference them without a nil-pointer when
+  # existingSecret is used (the values below are also the template's fallbacks).
+  secretKeys:
+    postgresPassword: "postgres-password"
+    openprimePassword: "openprime-user-password"
+    keycloakPassword: "keycloak-user-password"
   # Password to use if existingSecret is not set (not recommended for production)
   postgresPassword: "postgres"
 
