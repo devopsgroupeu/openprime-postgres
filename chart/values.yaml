@@ -192,12 +192,16 @@ healthCheck:
     failureThreshold: 6
   readinessProbe:
     exec:
+      # Ready only when all three databases accept connections. Must be a single
+      # `sh -c` script: extra list items after the first are $0/$1, not commands,
+      # and `exec` would replace the shell before the later checks ran.
       command:
         - /bin/sh
         - -c
-        - exec pg_isready -U postgres -d postgres -h 127.0.0.1 -p 5432
-        - exec pg_isready -U postgres -d openprime -h 127.0.0.1 -p 5432
-        - exec pg_isready -U postgres -d keycloak -h 127.0.0.1 -p 5432
+        - >-
+          pg_isready -U postgres -d postgres -h 127.0.0.1 -p 5432 &&
+          pg_isready -U postgres -d openprime -h 127.0.0.1 -p 5432 &&
+          pg_isready -U postgres -d keycloak -h 127.0.0.1 -p 5432
     initialDelaySeconds: 5
     periodSeconds: 5
     timeoutSeconds: 3
