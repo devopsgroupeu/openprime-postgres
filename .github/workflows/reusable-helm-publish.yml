@@ -1,0 +1,66 @@
+name: Reusable Helm Publish
+
+# Chart-only variant: bumps the chart version and publishes. Unlike the image-backed
+# services, this chart uses an upstream image (postgres:15-alpine), so it does NOT
+# rewrite the image repository/tag in values.yaml.
+
+on:
+  workflow_call:
+    inputs:
+      chart-path:
+        required: false
+        type: string
+        default: "./chart"
+      version:
+        required: false
+        type: string
+        description: "The version of the Helm chart to publish"
+      registry:
+        required: false
+        type: string
+        default: "ghcr.io"
+      package-name:
+        required: true
+        type: string
+        description: "The name of the chart package (e.g., openprime-postgres)"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.12.0"
+
+      - name: Log in to Container Registry
+        run: |
+          echo ${{ secrets.GITHUB_TOKEN }} | helm registry login ${{ inputs.registry }} --username ${{ github.actor }} --password-stdin
+
+      - name: Update Chart Version
+        id: update
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="0.0.0-${{ github.sha }}"
+          fi
+
+          # Chart version tracks the semantic-release version; the image is upstream
+          # and intentionally left untouched.
+          sed -i "s/^version:.*/version: ${VERSION}/" ${{ inputs.chart-path }}/Chart.yaml
+
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Package and Push Helm Chart
+        run: |
+          VERSION="${{ steps.update.outputs.version }}"
+          mkdir -p charts/
+          helm dependency update ${{ inputs.chart-path }} || true
+          helm package ${{ inputs.chart-path }} --destination ./charts/
+          helm push ./charts/${{ inputs.package-name }}-${VERSION}.tgz oci://${{ inputs.registry }}/${{ github.repository_owner }}/helm
