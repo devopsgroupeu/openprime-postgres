@@ -130,6 +130,10 @@ auth:
     postgresPassword: "postgres-password"
     openprimePassword: "openprime-user-password"
     keycloakPassword: "keycloak-user-password"
+  # Inline passwords the chart wraps into a generated <fullname>-auth Secret when
+  # existingSecret is unset. Empty by default (render falls back to the plaintext
+  # passwords below); defining the map prevents a nil-pointer at default render.
+  secrets: {}
   # Password to use if existingSecret is not set (not recommended for production)
   postgresPassword: "postgres"
 
