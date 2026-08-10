@@ -230,3 +230,35 @@ networkPolicy:
             matchLabels:
               app.kubernetes.io/name: openprime-keycloak
   egress: []
+# Interim backups for OP-167. Off by default: turning this on requires a bucket
+# and S3 credentials, so it must be an explicit choice per environment.
+#
+# This is a stopgap, not durability. No HA, no PITR - it converts total data
+# loss into loss-since-last-dump while the managed-vs-operator decision is made.
+#
+# Credentials: annotate the chart's ServiceAccount with an IRSA role that can
+# PutObject into `bucket`/`prefix` (serviceAccount.annotations). Do not mount
+# static keys.
+#
+# Retention: set a lifecycle rule on the bucket. Deliberately not done here, so
+# it survives this chart being uninstalled.
+backup:
+  enabled: false
+  schedule: "0 2 * * *"
+  bucket: ""
+  prefix: "openprime-postgres"
+  region: "eu-west-1"
+  # Superuser, so pg_dumpall can read roles and every database.
+  user: "postgres"
+  # Floor for a plausible dump. A successful connection that returns almost
+  # nothing still produces a valid gzip, so size is the only cheap guard.
+  minBytes: 4096
+  awsCliImage: "amazon/aws-cli:2.32.9"
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
