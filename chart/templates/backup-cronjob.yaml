@@ -1,0 +1,135 @@
+{{- if .Values.backup.enabled }}
+{{- /*
+  Interim durability for the single-pod PostgreSQL (OP-167).
+
+  This is NOT high availability and NOT point-in-time recovery. It converts
+  "lose everything" into "lose everything since the last dump", and it exists to
+  buy time for the managed-vs-operator decision, not to settle it.
+
+  Two official images, one pod, no package installs at run time: a backup that
+  depends on a package mirror being up fails exactly when you least want it to.
+    initContainer  postgres  -> pg_dump + integrity check into a shared emptyDir
+    container      aws-cli   -> upload to S3
+
+  Retention is deliberately NOT implemented here. It belongs on the bucket as a
+  lifecycle rule, where it survives this chart being uninstalled.
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "openprime-postgres.fullname" . }}-backup
+  labels:
+    {{- include "openprime-postgres.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  # Keep failed pods around - a backup that failed silently is the failure mode
+  # this whole job exists to avoid, so the evidence has to outlive the pod.
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      # No retries: a retry that succeeds hides a flaky backup path, and
+      # KubeJobFailed is what we want to fire.
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "openprime-postgres.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "openprime-postgres.serviceAccountName" . }}
+          {{- with .Values.podSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumes:
+            - name: dump
+              emptyDir: {}
+          initContainers:
+            - name: dump
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              env:
+                - name: PGHOST
+                  value: {{ include "openprime-postgres.fullname" . }}
+                - name: PGPORT
+                  value: {{ .Values.service.port | quote }}
+                - name: PGUSER
+                  value: {{ .Values.backup.user | quote }}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      {{- if .Values.auth.existingSecret }}
+                      name: {{ .Values.auth.existingSecret }}
+                      key: {{ .Values.auth.secretKeys.postgresPassword | default "postgres-password" }}
+                      {{- else }}
+                      name: {{ include "openprime-postgres.fullname" . }}-auth
+                      key: postgres-password
+                      {{- end }}
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  # pg_dumpall captures roles and every database, so a restore does
+                  # not silently lose the keycloak/openprime users.
+                  pg_dumpall --clean | gzip -9 > /dump/dump.sql.gz
+
+                  # An unverified dump is not a backup. gzip -t catches a truncated
+                  # or corrupt stream, which is what a mid-dump OOM or disk-full
+                  # produces - and which would otherwise upload happily.
+                  gzip -t /dump/dump.sql.gz
+
+                  size=$(stat -c %s /dump/dump.sql.gz)
+                  echo "dump ok: ${size} bytes"
+                  # A near-empty dump means the connection succeeded but the data
+                  # did not come with it. Fail loudly rather than archive nothing.
+                  [ "$size" -ge {{ .Values.backup.minBytes }} ] || {
+                    echo "dump is only ${size} bytes, below minBytes={{ .Values.backup.minBytes }}" >&2
+                    exit 1
+                  }
+              volumeMounts:
+                - name: dump
+                  mountPath: /dump
+              {{- with .Values.securityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- with .Values.backup.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+          containers:
+            - name: upload
+              image: {{ .Values.backup.awsCliImage | quote }}
+              env:
+                - name: AWS_REGION
+                  value: {{ .Values.backup.region | quote }}
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  key="{{ .Values.backup.prefix }}/$(date -u +%Y/%m/%d)/postgres-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
+                  aws s3 cp /dump/dump.sql.gz "s3://{{ .Values.backup.bucket }}/${key}"
+                  echo "uploaded s3://{{ .Values.backup.bucket }}/${key}"
+              volumeMounts:
+                - name: dump
+                  mountPath: /dump
+              {{- with .Values.securityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- with .Values.backup.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
