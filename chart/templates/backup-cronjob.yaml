@@ -47,6 +47,12 @@ spec:
           volumes:
             - name: dump
               emptyDir: {}
+            # The aws-cli image resolves its config and cache directory from
+            # $HOME. The pod runs as a non-root uid, so an unset HOME resolves
+            # to `/` and every upload dies on `Permission denied: '/.aws'` —
+            # before it ever reaches AWS, so no IAM change can fix it.
+            - name: aws-home
+              emptyDir: {}
           initContainers:
             - name: dump
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -106,6 +112,8 @@ spec:
               env:
                 - name: AWS_REGION
                   value: {{ .Values.backup.region | quote }}
+                - name: HOME
+                  value: /home/aws
               command:
                 - /bin/sh
                 - -ec
@@ -116,6 +124,8 @@ spec:
               volumeMounts:
                 - name: dump
                   mountPath: /dump
+                - name: aws-home
+                  mountPath: /home/aws
               {{- with .Values.securityContext }}
               securityContext:
                 {{- toYaml . | nindent 16 }}
