@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.0...v0.5.1) (2026-08-30)
+
+### 🐛 Bug Fixes
+
+* **backup:** give aws-cli a writable HOME so the upload can run as non-root ([c7e10db](https://github.com/devopsgroupeu/openprime-postgres/commit/c7e10db208f2ee42f0fec53bf0a77e63530f6d3c))
+
 ## [0.5.0](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.4.2...v0.5.0) (2026-08-10)
 
 ### 🚀 Features
