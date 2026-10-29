@@ -40,7 +40,9 @@ that loses the `openprime_user` / `keycloak_user` roles restores tables nothing
 can read. `gzip -t` and the size floor exist because a truncated or near-empty
 dump is still a *valid* gzip and would otherwise upload happily.
 
-The IAM role behind the ServiceAccount is expected to be write-only:
+The backup runs under its own ServiceAccount, `<release>-backup`; put the IRSA
+role on it with `backup.serviceAccount.annotations`. That role is expected to be
+write-only:
 `s3:PutObject` on the prefix and nothing else. The pod then cannot read a dump
 back, list what exists, or delete one, so a compromised database pod cannot use
 the backup path to exfiltrate the data or destroy its own backups.
