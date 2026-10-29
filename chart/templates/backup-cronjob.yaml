@@ -67,13 +67,8 @@ spec:
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      {{- if .Values.auth.existingSecret }}
-                      name: {{ .Values.auth.existingSecret }}
+                      name: {{ include "openprime-postgres.secretName" . }}
                       key: {{ .Values.auth.secretKeys.postgresPassword | default "postgres-password" }}
-                      {{- else }}
-                      name: {{ include "openprime-postgres.fullname" . }}-auth
-                      key: postgres-password
-                      {{- end }}
               command:
                 - /bin/sh
                 - -ec

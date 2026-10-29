@@ -94,15 +94,6 @@ postgresql:
       owner: "openprime_user"
     - name: "keycloak"
       owner: "keycloak_user"
-  
-  # Users to create
-  users:
-    - name: "openprime_user"
-      password: "openprime123"
-      database: "openprime"
-    - name: "keycloak_user"
-      password: "keycloak123"
-      database: "keycloak"
 
   # PostgreSQL configuration parameters
   config:
@@ -123,19 +114,24 @@ auth:
   existingSecret: ""
   # Key in the existing secret containing the postgres password
   secretKey: "postgres-password"
-  # Keys within existingSecret for each database's password. Must be defined so
-  # the deployment template can reference them without a nil-pointer when
-  # existingSecret is used (the values below are also the template's fallbacks).
+  # Keys for each password, in existingSecret or in the generated Secret. Must be
+  # defined so the templates can reference them without a nil-pointer (the values
+  # below are also the template's fallbacks).
   secretKeys:
     postgresPassword: "postgres-password"
     openprimePassword: "openprime-user-password"
     keycloakPassword: "keycloak-user-password"
   # Inline passwords the chart wraps into a generated <fullname>-auth Secret when
-  # existingSecret is unset. Empty by default (render falls back to the plaintext
-  # passwords below); defining the map prevents a nil-pointer at default render.
+  # existingSecret is unset. There are no defaults: without existingSecret, all
+  # three are required and the chart refuses to render otherwise.
   secrets: {}
-  # Password to use if existingSecret is not set (not recommended for production)
-  postgresPassword: "postgres"
+  #   postgresPassword: ""
+  #   openprimePassword: ""
+  #   keycloakPassword: ""
+  # The init script sets the openprime_user/keycloak_user passwords only when the
+  # data directory is first created. This re-applies them from the Secret on every
+  # pod start, which is how a rotated Secret reaches an existing database.
+  autoSyncPasswords: false
 
 # Persistent storage
 persistence:
@@ -155,19 +151,27 @@ initdb:
     01-init-databases.sh: |
       #!/bin/bash
       set -e
-      
+
+      # Passwords come from the chart's Secret through the environment and reach
+      # SQL only as psql variables: :'name' quotes the value, so a password is
+      # never spliced into the statement text.
+      : "${OPENPRIME_USER_PASSWORD:?is not set - it comes from the chart Secret}"
+      : "${KEYCLOAK_USER_PASSWORD:?is not set - it comes from the chart Secret}"
+
       # Create openprime database and user
-      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+        -v password="$OPENPRIME_USER_PASSWORD" <<-EOSQL
         CREATE DATABASE openprime;
-        CREATE USER openprime_user WITH PASSWORD 'openprime123';
+        CREATE USER openprime_user WITH PASSWORD :'password';
         GRANT ALL PRIVILEGES ON DATABASE openprime TO openprime_user;
         ALTER USER openprime_user CREATEDB;
       EOSQL
       
       # Create keycloak database and user with proper permissions
-      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+        -v password="$KEYCLOAK_USER_PASSWORD" <<-EOSQL
         CREATE DATABASE keycloak;
-        CREATE USER keycloak_user WITH PASSWORD 'keycloak123';
+        CREATE USER keycloak_user WITH PASSWORD :'password';
         GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak_user;
         ALTER USER keycloak_user CREATEDB;
       EOSQL

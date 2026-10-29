@@ -60,3 +60,11 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+The Secret holding the passwords: auth.existingSecret, or the <fullname>-auth
+Secret the chart generates from auth.secrets.
+*/}}
+{{- define "openprime-postgres.secretName" -}}
+{{- .Values.auth.existingSecret | default (printf "%s-auth" (include "openprime-postgres.fullname" .)) }}
+{{- end }}
