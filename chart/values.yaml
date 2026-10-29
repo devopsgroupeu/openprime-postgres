@@ -16,7 +16,11 @@ image:
   repository: postgres
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "15-alpine"
+  # Pinned, and kept equal to appVersion in Chart.yaml: bump the two together.
+  # The floating 15-alpine swapped the server binary on whichever restart
+  # happened to pull. Stay on Alpine: changing libc under an existing data
+  # directory changes collation order, which silently corrupts text indexes.
+  tag: "15.19-alpine"
 
 imagePullSecrets: []
 nameOverride: ""
