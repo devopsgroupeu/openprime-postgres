@@ -6,6 +6,11 @@ metadata:
     {{- include "openprime-postgres.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # One pod on one ReadWriteOnce volume. A rolling update starts the new pod
+  # before stopping the old one: on another node it hangs on Multi-Attach, on
+  # the same node it can open the live data directory a second time.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "openprime-postgres.selectorLabels" . | nindent 6 }}
@@ -43,6 +48,17 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.postgresql.config }}
+          # Server parameters only take effect as `postgres -c key=value`. They
+          # used to be rendered as POSTGRES_<KEY> env vars, which the official
+          # image does not read, so none of them was ever applied. The image's
+          # entrypoint prepends `postgres` to args that start with a dash.
+          args:
+            {{- range $key, $value := . }}
+            - "-c"
+            - {{ printf "%s=%v" $key $value | quote }}
+            {{- end }}
+          {{- end }}
           ports:
             - name: postgresql
               containerPort: {{ .Values.service.targetPort }}
@@ -98,10 +114,6 @@ spec:
 
             - name: PGDATA
               value: {{ .Values.persistence.mountPath }}/pgdata
-            {{- range $key, $value := .Values.postgresql.config }}
-            - name: POSTGRES_{{ $key | upper }}
-              value: {{ $value | quote }}
-            {{- end }}
           {{- if .Values.healthCheck.enabled }}
           livenessProbe:
             {{- toYaml .Values.healthCheck.livenessProbe | nindent 12 }}
