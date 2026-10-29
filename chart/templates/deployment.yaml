@@ -6,6 +6,11 @@ metadata:
     {{- include "openprime-postgres.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # One pod on one ReadWriteOnce volume. A rolling update starts the new pod
+  # before stopping the old one: on another node it hangs on Multi-Attach, on
+  # the same node it can open the live data directory a second time.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "openprime-postgres.selectorLabels" . | nindent 6 }}
