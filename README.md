@@ -11,7 +11,7 @@ This repository contains a Helm chart for deploying PostgreSQL to Kubernetes as 
 Deploy PostgreSQL to Kubernetes:
 
 ```bash
-helm install openprime-postgres ./chart
+helm install openprime-postgres ./chart --set auth.existingSecret=openprime-postgres-auth
 ```
 
 ## Configuration
@@ -26,6 +26,15 @@ See `chart/values.yaml` for all available configuration options.
 | `image.tag` | PostgreSQL image tag | `15-alpine` |
 | `persistence.size` | Storage size | `10Gi` |
 | `postgresql.databases` | Databases to create | `openprime`, `keycloak` |
+
+### Passwords
+
+The chart has no default passwords and refuses to render without them. Either:
+
+- set `auth.existingSecret` to a Secret holding the three keys named in `auth.secretKeys` (`postgres-password`, `openprime-user-password`, `keycloak-user-password`), or
+- set `auth.secrets.postgresPassword`, `auth.secrets.openprimePassword` and `auth.secrets.keycloakPassword`, and the chart generates `<release>-auth` from them.
+
+The init script creates `openprime_user` and `keycloak_user` with the passwords from that Secret, but only when the data directory is first created. To apply a rotated Secret to an existing database, set `auth.autoSyncPasswords: true`, which re-applies both on every pod start.
 
 ## Backup & Restore
 
