@@ -11,6 +11,9 @@ on:
       - "**.md"
       - "docs/**"
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -21,18 +24,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: "v3.12.0"
 
       - name: Lint chart
         run: helm lint chart
 
-      - name: Template chart (default values must render)
-        run: helm template ci chart > /dev/null
+      - name: Template chart (renders with an existing Secret or inline passwords)
+        run: |
+          helm template ci chart --set auth.existingSecret=ci > /dev/null
+          helm template ci chart \
+            --set auth.secrets.postgresPassword=a,auth.secrets.openprimePassword=b,auth.secrets.keycloakPassword=c \
+            > /dev/null
+
+      # The chart has no default passwords, so the default values must NOT render.
+      - name: Template chart (refuses to render without passwords)
+        run: |
+          if helm template ci chart > /dev/null 2>&1; then
+            echo "chart rendered with no passwords configured" >&2
+            exit 1
+          fi
 
   validate-pr-title:
     name: Validate PR Title

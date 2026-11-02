@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.3](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.2...v0.5.3) (2026-11-02)
+
+### 🐛 Bug Fixes
+
+* recreate strategy and actually applied server parameters for postgres (OP-167) ([#8](https://github.com/devopsgroupeu/openprime-postgres/issues/8)) ([2464791](https://github.com/devopsgroupeu/openprime-postgres/commit/246479122bcbd0323048a97c066056513798c562))
+
+## [0.5.3](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.2...v0.5.3) (2026-11-02)
+
+### 🐛 Bug Fixes
+
+* recreate strategy and actually applied server parameters for postgres (OP-167) ([#8](https://github.com/devopsgroupeu/openprime-postgres/issues/8)) ([2464791](https://github.com/devopsgroupeu/openprime-postgres/commit/246479122bcbd0323048a97c066056513798c562))
+
+## [0.5.2](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.1...v0.5.2) (2026-10-29)
+
+### 🐛 Bug Fixes
+
+* take every postgres password from a secret and drop the defaults (OP-167) ([#9](https://github.com/devopsgroupeu/openprime-postgres/issues/9)) ([7a41497](https://github.com/devopsgroupeu/openprime-postgres/commit/7a414973d247f6c809d9937b35d8f1e29d6fc136))
+
+### 📚 Documentation
+
+* document the backup job, the restore trap and the failed-job cleanup ([aae55e1](https://github.com/devopsgroupeu/openprime-postgres/commit/aae55e148680ffb902c7f775c51cadf5f35fadc6))
+
 ## [0.5.1](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.0...v0.5.1) (2026-08-30)
 
 ### 🐛 Bug Fixes
