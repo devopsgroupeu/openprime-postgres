@@ -76,6 +76,11 @@ local copies and any scratch database once the restore is verified.
 
 ### After a failed backup run
 
+A run retries up to `backup.backoffLimit` times (default 3, about a minute of
+back-off) before the Job counts as failed. Failed attempts of a run that
+eventually succeeded stay as pods of that Job: a retry that saved the night is
+worth a look too.
+
 `backup.failedJobsHistoryLimit` keeps failed Jobs for investigation, and the
 `KubeJobFailed` alert fires on their mere existence — a later successful run
 does **not** clear it. Once you have investigated, delete the Job object:

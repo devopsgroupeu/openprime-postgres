@@ -29,9 +29,12 @@ spec:
   failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
   jobTemplate:
     spec:
-      # No retries: a retry that succeeds hides a flaky backup path, and
-      # KubeJobFailed is what we want to fire.
-      backoffLimit: 0
+      # Retries ride out a transient failure (the database briefly down while
+      # its node is replaced, an S3 or STS hiccup) that would otherwise cost the
+      # night's backup, as on 2026-11-02. A flaky path stays visible: failed
+      # attempts remain as pods of the Job even when a retry succeeds, and only a
+      # Job that exhausts its retries is Failed and fires KubeJobFailed.
+      backoffLimit: {{ int .Values.backup.backoffLimit }}
       template:
         metadata:
           # Not the server's selector labels: with those this pod was an endpoint
