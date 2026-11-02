@@ -1,6 +1,6 @@
 {
   "name": "openprime-postgres",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "description": "OpenPrime PostgreSQL Helm chart",
   "devDependencies": {
