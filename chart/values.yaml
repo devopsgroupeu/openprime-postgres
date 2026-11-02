@@ -264,6 +264,10 @@ backup:
   # Floor for a plausible dump. A successful connection that returns almost
   # nothing still produces a valid gzip, so size is the only cheap guard.
   minBytes: 4096
+  # Attempts after the first, spaced by Kubernetes' exponential back-off
+  # (10s, 20s, 40s, ...): 3 rides out about a minute of database or S3
+  # unavailability. 0 disables retries.
+  backoffLimit: 3
   awsCliImage: "amazon/aws-cli:2.32.9"
   serviceAccount:
     # e.g. eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<backup-role>
