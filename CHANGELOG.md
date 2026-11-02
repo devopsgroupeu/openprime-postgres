@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.5](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.4...v0.5.5) (2026-11-02)
+
+### 🐛 Bug Fixes
+
+* **backup:** retry a failed backup run up to three times (OP-167) ([#18](https://github.com/devopsgroupeu/openprime-postgres/issues/18)) ([45341f1](https://github.com/devopsgroupeu/openprime-postgres/commit/45341f1c6cee6e187e75153f9eee906b39b32362))
+
 ## [0.5.4](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.3...v0.5.4) (2026-11-02)
 
 ### 🐛 Bug Fixes
