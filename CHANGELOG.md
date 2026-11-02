@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.4](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.3...v0.5.4) (2026-11-02)
+
+### 🐛 Bug Fixes
+
+* **backup:** own labels and service account for the backup cronjob (OP-167) ([#10](https://github.com/devopsgroupeu/openprime-postgres/issues/10)) ([f8219ff](https://github.com/devopsgroupeu/openprime-postgres/commit/f8219ffb5de27f6e6a4f6ea3b2e93c19ad8e19e3))
+
 ## [0.5.3](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.2...v0.5.3) (2026-11-02)
 
 ### 🐛 Bug Fixes
