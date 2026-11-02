@@ -23,7 +23,7 @@ See `chart/values.yaml` for all available configuration options.
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `replicaCount` | Number of replicas | `1` |
-| `image.tag` | PostgreSQL image tag | `15-alpine` |
+| `image.tag` | PostgreSQL image tag, kept equal to `appVersion` | `15.19-alpine` |
 | `persistence.size` | Storage size | `10Gi` |
 | `postgresql.databases` | Databases to create | `openprime`, `keycloak` |
 
