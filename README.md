@@ -99,14 +99,18 @@ Prometheus Operator, on clusters that serve `monitoring.coreos.com/v1`. The
 cluster's Prometheus loads only rules its `ruleSelector` matches and silently
 ignores the rest; kube-prometheus-stack selects its release label, so set
 `prometheusRule.additionalLabels` to e.g. `release: kube-prometheus-stack`.
-The rules read kube-state-metrics series.
+The rules read kube-state-metrics series. They bridge the minute or two in
+which kube-state-metrics moves to another node (`last_over_time` over 3m for
+the database, 10m for backups), so a move does not post a false "resolved".
+Backup Jobs are recognised by their owner, the backup CronJob, which also
+covers Jobs created from it with `kubectl create job --from=cronjob`.
 
 | Alert | Severity | Fires when |
 |-------|----------|------------|
 | `OpenPrimePostgresDown` | critical | No available pod for `prometheusRule.downFor` (default `1m`) |
 | `OpenPrimePostgresBackupFailed` | critical | A backup Job created in the last 24 h failed after all its retries (its Failed condition) |
 | `OpenPrimePostgresBackupRetried` | warning | A backup Job created in the last 24 h succeeded, but only after failed attempts |
-| `OpenPrimePostgresBackupMissing` | warning | No successful backup for `prometheusRule.backupMaxAgeHours` (default `26`), including a CronJob that never succeeded |
+| `OpenPrimePostgresBackupMissing` | warning | No successful backup for `prometheusRule.backupMaxAgeHours` (a whole number, default `26`), including a CronJob that never succeeded |
 
 The backup alerts exist only with `backup.enabled`. The strategy is `Recreate`,
 so a rollout takes the database down for about a minute and can fire

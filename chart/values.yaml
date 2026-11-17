@@ -298,6 +298,6 @@ prometheusRule:
   # so a deploy can fire it; see the comment on the rule.
   downFor: 1m
   # OpenPrimePostgresBackupMissing (only with backup.enabled): no successful
-  # backup for this many hours. Daily schedule plus 2 hours for a slow or
-  # retried run.
+  # backup for this many hours, a whole number. Daily schedule plus 2 hours
+  # for a slow or retried run.
   backupMaxAgeHours: 26
