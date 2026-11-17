@@ -280,3 +280,24 @@ backup:
       memory: 128Mi
     limits:
       memory: 512Mi
+
+# Alert rules for this database (OP-278): a PrometheusRule for the Prometheus
+# Operator, rendered only on clusters that serve monitoring.coreos.com/v1.
+# Off by default. The cluster's Prometheus loads only the rules its ruleSelector
+# matches, and a rule it does not select is silently ignored: kube-prometheus-
+# stack selects its own release label, so set e.g.
+#   additionalLabels:
+#     release: kube-prometheus-stack
+# The rules read kube-state-metrics series (kube_deployment_*, kube_job_*,
+# kube_cronjob_*), so the cluster has to run kube-state-metrics.
+prometheusRule:
+  enabled: false
+  additionalLabels: {}
+  # OpenPrimePostgresDown: how long the Deployment may have no available pod.
+  # A rollout (strategy Recreate) takes the database down for about a minute,
+  # so a deploy can fire it; see the comment on the rule.
+  downFor: 1m
+  # OpenPrimePostgresBackupMissing (only with backup.enabled): no successful
+  # backup for this many hours, a whole number. Daily schedule plus 2 hours
+  # for a slow or retried run.
+  backupMaxAgeHours: 26
