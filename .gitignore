@@ -23,3 +23,6 @@ charts/*.tgz
 # PostgreSQL data
 data/
 pgdata/
+
+# Rules rendered by scripts/test-alert-rules.sh
+tests/alert-rules/rules.generated.yml
