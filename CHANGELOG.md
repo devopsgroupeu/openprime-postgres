@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.5...v0.6.0) (2026-11-23)
+
+### 🚀 Features
+
+* **chart:** alert rules for database down and backups (OP-278) ([#21](https://github.com/devopsgroupeu/openprime-postgres/issues/21)) ([3d103be](https://github.com/devopsgroupeu/openprime-postgres/commit/3d103be7a0f272341dce9ab5daa875301e5bcebb))
+
 ## [0.5.5](https://github.com/devopsgroupeu/openprime-postgres/compare/v0.5.4...v0.5.5) (2026-11-02)
 
 ### 🐛 Bug Fixes
