@@ -1,0 +1,142 @@
+{{- if and .Values.prometheusRule.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- /*
+  Alerts for the single-replica database and its nightly backup (OP-278).
+  Every database outage so far was found by someone happening to look, and a
+  failed backup surfaced 8 hours late. The kube-prometheus-stack defaults are
+  too slow for a 1-2 minute outage (KubePodNotReady and
+  KubeDeploymentReplicasMismatch wait 15 minutes).
+
+  The series come from kube-state-metrics, which runs on spot nodes and moves
+  every few hours. Each move gives its series a new `instance` label and leaves
+  a gap of a minute or more without them. So every input is
+  last_over_time(...[window]) to bridge the gap, then max by the labels the
+  alert keeps, so the old and the new pod's series count once and the alert
+  keeps its identity. Without that, a move during an outage or a failed backup
+  posts "resolved" to Slack and then fires again.
+
+  Annotations use Prometheus templates, written as {{`{{ ... }}`}} so Helm
+  leaves them alone. Unit tests: tests/alert-rules (scripts/test-alert-rules.sh).
+*/}}
+{{- $fullname := include "openprime-postgres.fullname" . }}
+{{- $ns := .Release.Namespace }}
+{{- $backupCronJob := printf "%s-backup" $fullname }}
+{{- $maxAgeHours := toString .Values.prometheusRule.backupMaxAgeHours }}
+{{- if not (regexMatch "^[1-9][0-9]*$" $maxAgeHours) }}
+{{- fail (printf "prometheusRule.backupMaxAgeHours must be a whole number of hours, got %q" $maxAgeHours) }}
+{{- end }}
+{{- $backupMaxAge := mul (atoi $maxAgeHours) 3600 }}
+{{- /* Selects the Jobs of the backup CronJob, scheduled or created by hand with
+  kubectl create job --from=cronjob, which sets the same owner. The name prefix
+  alone would also match another CronJob named e.g. <release>-backup-verify. */}}
+{{- $ownedByBackup := printf "max by (namespace, job_name) (last_over_time(kube_job_owner{namespace=%q, owner_kind=\"CronJob\", owner_name=%q}[10m]))" $ns $backupCronJob }}
+{{- $createdLastDay := printf "time() - max by (namespace, job_name) (last_over_time(kube_job_created{namespace=%q, job_name=~\"%s-.+\"}[10m])) < 86400" $ns $backupCronJob }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "openprime-postgres.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: {{ $fullname }}
+      rules:
+        # No pod of the Deployment is available: the API (whose /ready then
+        # answers 503) and Keycloak logins fail. An outage lasts 1-2 minutes
+        # (node maintenance, a deleted node, a crash), so the window is short.
+        # The chart's strategy is Recreate, so a rollout takes the database
+        # down for about a minute too and can fire this. That is accepted: a
+        # deploy is an outage for every user, deploys are rare and planned, and
+        # the alert resolves on its own; a window long enough to skip deploys
+        # would also skip the outages this rule is for. spec_replicas > 0 keeps
+        # a deliberate scale to zero quiet.
+        # The 3m bridge is shorter than the backup rules' 10m: an old
+        # kube-state-metrics series still saying "available" counts for up to
+        # 3m, which could delay this alert when the database goes down while
+        # kube-state-metrics is moving.
+        - alert: OpenPrimePostgresDown
+          expr: |
+            max by (namespace, deployment) (last_over_time(kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ $fullname }}"}[3m])) == 0
+            and on (namespace, deployment)
+            max by (namespace, deployment) (last_over_time(kube_deployment_spec_replicas{namespace="{{ $ns }}", deployment="{{ $fullname }}"}[3m])) > 0
+          for: {{ .Values.prometheusRule.downFor }}
+          labels:
+            severity: critical
+          annotations:
+            summary: The OpenPrime database is down.
+            description: >-
+              {{ $fullname }} in {{ $ns }} has had no available pod for {{ .Values.prometheusRule.downFor }}.
+              The OpenPrime API and Keycloak logins fail until it is back. A Postgres rollout also
+              causes this for about a minute. Check the pod and its events in the {{ $ns }} namespace.
+        {{- if .Values.backup.enabled }}
+        # A backup Job that used up its retries (backup.backoffLimit) and is
+        # Failed: the Job's Failed condition, the signal KubeJobFailed uses,
+        # not the count of failed pods (a Job that a retry saved has failed
+        # pods too; see OpenPrimePostgresBackupRetried). Failed Jobs are kept
+        # (failedJobsHistoryLimit), so only one created in the last 24 hours
+        # counts: this resolves 24 hours after the failed Job was created, and
+        # the next night's run fires it again if that one fails too.
+        # KubeJobFailed also fires for the Job, later (15m) and until the Job
+        # is deleted.
+        - alert: OpenPrimePostgresBackupFailed
+          expr: |
+            max by (namespace, job_name) (last_over_time(kube_job_failed{namespace="{{ $ns }}", job_name=~"{{ $backupCronJob }}-.+", condition="true"}[10m])) == 1
+            and on (namespace, job_name)
+            {{ $ownedByBackup }}
+            and on (namespace, job_name)
+            {{ $createdLastDay }}
+          labels:
+            severity: critical
+          annotations:
+            summary: The OpenPrime database backup failed.
+            description: >-
+              Backup Job {{`{{ $labels.job_name }}`}} failed after all its retries, so this run's dump
+              is not in S3. The reason is in the logs of its pods (containers dump and upload).
+              Run it again with: kubectl -n {{ $ns }} create job --from=cronjob/{{ $backupCronJob }} {{ $backupCronJob }}-manual-$(date +%s)
+        # The backup Job succeeded, but only after failed attempts. The retries
+        # (backup.backoffLimit) save the night, and this keeps a flaky backup
+        # path visible anyway, which is why retries used to be off. Like
+        # OpenPrimePostgresBackupFailed, it counts Jobs from the last 24 hours.
+        # The inner max by reason counts each reason once while the old and
+        # the new kube-state-metrics series overlap.
+        - alert: OpenPrimePostgresBackupRetried
+          expr: |
+            sum by (namespace, job_name) (max by (namespace, job_name, reason) (last_over_time(kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupCronJob }}-.+"}[10m]))) > 0
+            and on (namespace, job_name)
+            max by (namespace, job_name) (last_over_time(kube_job_complete{namespace="{{ $ns }}", job_name=~"{{ $backupCronJob }}-.+", condition="true"}[10m])) == 1
+            and on (namespace, job_name)
+            {{ $ownedByBackup }}
+            and on (namespace, job_name)
+            {{ $createdLastDay }}
+          labels:
+            severity: warning
+          annotations:
+            summary: The OpenPrime database backup needed a retry.
+            description: >-
+              Backup Job {{`{{ $labels.job_name }}`}} succeeded, but only after {{`{{ $value | printf "%.0f" }}`}}
+              failed attempt(s). The backup is in S3; the failed pods of the Job show what went wrong.
+        # No successful backup for backupMaxAgeHours, whatever the reason: runs
+        # that fail, a suspended CronJob, a schedule that never fires. The
+        # second half covers a CronJob that has never succeeded at all, where
+        # last_successful_time does not exist yet.
+        - alert: OpenPrimePostgresBackupMissing
+          expr: |
+            time() - max by (namespace, cronjob) (last_over_time(kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="{{ $backupCronJob }}"}[10m])) > {{ $backupMaxAge }}
+            or
+            (
+              time() - max by (namespace, cronjob) (last_over_time(kube_cronjob_created{namespace="{{ $ns }}", cronjob="{{ $backupCronJob }}"}[10m])) > {{ $backupMaxAge }}
+              unless on (namespace, cronjob)
+              last_over_time(kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="{{ $backupCronJob }}"}[10m])
+            )
+          labels:
+            severity: warning
+          annotations:
+            summary: The OpenPrime database has no recent backup.
+            description: >-
+              No successful run of {{ $backupCronJob }} for {{`{{ $value | humanizeDuration }}`}}
+              (alert after {{ $maxAgeHours }}h). Check the CronJob (suspended? schedule?)
+              and its recent Jobs in the {{ $ns }} namespace.
+        {{- end }}
+{{- end }}

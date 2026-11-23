@@ -1,0 +1,329 @@
+# promtool unit tests for chart/templates/prometheusrule.yaml (OP-278), run by
+# scripts/test-alert-rules.sh against the rules rendered as in production:
+# release openprime-postgres, namespace openprime, prometheusRule.downFor 1m,
+# backupMaxAgeHours 26, backup.backoffLimit 3. Series names and labels are those of kube-state-metrics
+# v2.17 (kube-prometheus-stack 80.13.3). Most cases leave out the instance and
+# job labels of the scrape; the "kube-state-metrics moves" cases have them.
+rule_files:
+  - rules.generated.yml
+evaluation_interval: 30s
+
+tests:
+  # --- OpenPrimePostgresDown --------------------------------------------------
+  # Down from 1m to 3m (2 minutes, like the outages seen): fires 1m in.
+  - interval: 30s
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="openprime",deployment="openprime-postgres"}'
+        values: "1 1 0 0 0 0 0 1 1 1"
+      - series: 'kube_deployment_spec_replicas{namespace="openprime",deployment="openprime-postgres"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: OpenPrimePostgresDown
+        exp_alerts: []
+      - eval_time: 2m30s
+        alertname: OpenPrimePostgresDown
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: openprime, deployment: openprime-postgres }
+            exp_annotations:
+              summary: The OpenPrime database is down.
+              description: "openprime-postgres in openprime has had no available pod for 1m. The OpenPrime API and Keycloak logins fail until it is back. A Postgres rollout also causes this for about a minute. Check the pod and its events in the openprime namespace."
+      - eval_time: 4m30s # back up: resolved
+        alertname: OpenPrimePostgresDown
+        exp_alerts: []
+
+  # A blip of one scrape (a restart that is back within 30 s): does not fire.
+  - interval: 30s
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="openprime",deployment="openprime-postgres"}'
+        values: "1 1 0 1 1 1 1 1"
+      - series: 'kube_deployment_spec_replicas{namespace="openprime",deployment="openprime-postgres"}'
+        values: "1x8"
+    alert_rule_test:
+      - { eval_time: 1m30s, alertname: OpenPrimePostgresDown, exp_alerts: [] }
+      - { eval_time: 3m, alertname: OpenPrimePostgresDown, exp_alerts: [] }
+
+  # Scaled to zero on purpose: does not fire.
+  - interval: 30s
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="openprime",deployment="openprime-postgres"}'
+        values: "0x10"
+      - series: 'kube_deployment_spec_replicas{namespace="openprime",deployment="openprime-postgres"}'
+        values: "0x10"
+    alert_rule_test:
+      - { eval_time: 4m, alertname: OpenPrimePostgresDown, exp_alerts: [] }
+
+  # Another Deployment, or the same name in another namespace: does not fire.
+  - interval: 30s
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="openprime",deployment="openprime-keycloak"}'
+        values: "0x10"
+      - series: 'kube_deployment_spec_replicas{namespace="openprime",deployment="openprime-keycloak"}'
+        values: "1x10"
+      - series: 'kube_deployment_status_replicas_available{namespace="sandbox",deployment="openprime-postgres"}'
+        values: "0x10"
+      - series: 'kube_deployment_spec_replicas{namespace="sandbox",deployment="openprime-postgres"}'
+        values: "1x10"
+    alert_rule_test:
+      - { eval_time: 4m, alertname: OpenPrimePostgresDown, exp_alerts: [] }
+
+  # kube-state-metrics moves to another node during an outage: the old pod's
+  # series stop at 1m30s, the new pod's start at 3m with another instance
+  # label. The alert keeps firing through the gap with the same labels, and
+  # resolves once the database is back at 6m.
+  - interval: 30s
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="openprime",deployment="openprime-postgres",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "1 1 0 0 stale"
+      - series: 'kube_deployment_spec_replicas{namespace="openprime",deployment="openprime-postgres",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "1 1 1 1 stale"
+      - series: 'kube_deployment_status_replicas_available{namespace="openprime",deployment="openprime-postgres",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x6 0 0 0 0 0 0 1 1 1 1"
+      - series: 'kube_deployment_spec_replicas{namespace="openprime",deployment="openprime-postgres",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x6 1x10"
+    alert_rule_test:
+      - eval_time: 2m30s # in the gap
+        alertname: OpenPrimePostgresDown
+        exp_alerts: &postgres_down
+          - exp_labels: { severity: critical, namespace: openprime, deployment: openprime-postgres }
+            exp_annotations:
+              summary: The OpenPrime database is down.
+              description: "openprime-postgres in openprime has had no available pod for 1m. The OpenPrime API and Keycloak logins fail until it is back. A Postgres rollout also causes this for about a minute. Check the pod and its events in the openprime namespace."
+      - { eval_time: 4m, alertname: OpenPrimePostgresDown, exp_alerts: *postgres_down }
+      - { eval_time: 7m, alertname: OpenPrimePostgresDown, exp_alerts: [] }
+
+  # --- OpenPrimePostgresBackupFailed / OpenPrimePostgresBackupRetried -------
+  # A Job that exhausts all its retries (backoffLimit 3: 4 failed pods), like
+  # openprime-postgres-backup-29893080 on 2026-11-02: "failed" fires at once and
+  # resolves once the Job is 24 hours old; "retried" stays quiet.
+  - interval: 1h
+    input_series:
+      - series: 'kube_job_failed{namespace="openprime",job_name="openprime-postgres-backup-29893080",condition="true"}'
+        values: "1x30"
+      - series: 'kube_job_failed{namespace="openprime",job_name="openprime-postgres-backup-29893080",condition="false"}'
+        values: "0x30"
+      - series: 'kube_job_status_failed{namespace="openprime",job_name="openprime-postgres-backup-29893080",reason="BackoffLimitExceeded"}'
+        values: "1x30"
+      - series: 'kube_job_status_failed{namespace="openprime",job_name="openprime-postgres-backup-29893080",reason="DeadlineExceeded"}'
+        values: "0x30"
+      - series: 'kube_job_status_failed{namespace="openprime",job_name="openprime-postgres-backup-29893080",reason="Evicted"}'
+        values: "0x30"
+      - series: 'kube_job_complete{namespace="openprime",job_name="openprime-postgres-backup-29893080",condition="true"}'
+        values: "0x30"
+      - series: 'kube_job_created{namespace="openprime",job_name="openprime-postgres-backup-29893080"}'
+        values: "0x30"
+      - series: 'kube_job_owner{namespace="openprime",job_name="openprime-postgres-backup-29893080",owner_kind="CronJob",owner_name="openprime-postgres-backup",owner_is_controller="true"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: OpenPrimePostgresBackupFailed
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: openprime, job_name: openprime-postgres-backup-29893080 }
+            exp_annotations:
+              summary: The OpenPrime database backup failed.
+              description: "Backup Job openprime-postgres-backup-29893080 failed after all its retries, so this run's dump is not in S3. The reason is in the logs of its pods (containers dump and upload). Run it again with: kubectl -n openprime create job --from=cronjob/openprime-postgres-backup openprime-postgres-backup-manual-$(date +%s)"
+      - { eval_time: 1h, alertname: OpenPrimePostgresBackupRetried, exp_alerts: [] }
+      - { eval_time: 25h, alertname: OpenPrimePostgresBackupFailed, exp_alerts: [] }
+
+  # A Job that succeeds after one failed pod: "retried" fires, "failed" does not,
+  # and "retried" resolves once the Job is 24 hours old.
+  - interval: 1h
+    input_series:
+      - series: 'kube_job_status_failed{namespace="openprime",job_name="openprime-postgres-backup-29894520"}'
+        values: "1x30"
+      - series: 'kube_job_complete{namespace="openprime",job_name="openprime-postgres-backup-29894520",condition="true"}'
+        values: "1x30"
+      - series: 'kube_job_complete{namespace="openprime",job_name="openprime-postgres-backup-29894520",condition="false"}'
+        values: "0x30"
+      - series: 'kube_job_created{namespace="openprime",job_name="openprime-postgres-backup-29894520"}'
+        values: "0x30"
+      - series: 'kube_job_owner{namespace="openprime",job_name="openprime-postgres-backup-29894520",owner_kind="CronJob",owner_name="openprime-postgres-backup",owner_is_controller="true"}'
+        values: "1x30"
+    alert_rule_test:
+      - { eval_time: 1h, alertname: OpenPrimePostgresBackupFailed, exp_alerts: [] }
+      - eval_time: 1h
+        alertname: OpenPrimePostgresBackupRetried
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: openprime, job_name: openprime-postgres-backup-29894520 }
+            exp_annotations:
+              summary: The OpenPrime database backup needed a retry.
+              description: "Backup Job openprime-postgres-backup-29894520 succeeded, but only after 1 failed attempt(s). The backup is in S3; the failed pods of the Job show what went wrong."
+      - { eval_time: 25h, alertname: OpenPrimePostgresBackupRetried, exp_alerts: [] }
+
+  # A clean run, a run still in progress after a failed pod, and a failed Job
+  # of another CronJob: all quiet.
+  - interval: 1h
+    input_series:
+      - series: 'kube_job_status_failed{namespace="openprime",job_name="openprime-postgres-backup-29895960"}'
+        values: "0x5"
+      - series: 'kube_job_complete{namespace="openprime",job_name="openprime-postgres-backup-29895960",condition="true"}'
+        values: "1x5"
+      - series: 'kube_job_created{namespace="openprime",job_name="openprime-postgres-backup-29895960"}'
+        values: "0x5"
+      - series: 'kube_job_owner{namespace="openprime",job_name="openprime-postgres-backup-29895960",owner_kind="CronJob",owner_name="openprime-postgres-backup",owner_is_controller="true"}'
+        values: "1x5"
+      - series: 'kube_job_status_failed{namespace="openprime",job_name="openprime-postgres-backup-29897400"}'
+        values: "1x5"
+      - series: 'kube_job_created{namespace="openprime",job_name="openprime-postgres-backup-29897400"}'
+        values: "0x5"
+      - series: 'kube_job_owner{namespace="openprime",job_name="openprime-postgres-backup-29897400",owner_kind="CronJob",owner_name="openprime-postgres-backup",owner_is_controller="true"}'
+        values: "1x5"
+      - series: 'kube_job_failed{namespace="openprime",job_name="other-cronjob-29894520",condition="true"}'
+        values: "1x5"
+      - series: 'kube_job_created{namespace="openprime",job_name="other-cronjob-29894520"}'
+        values: "0x5"
+      - series: 'kube_job_owner{namespace="openprime",job_name="other-cronjob-29894520",owner_kind="CronJob",owner_name="other-cronjob",owner_is_controller="true"}'
+        values: "1x5"
+    alert_rule_test:
+      - { eval_time: 2h, alertname: OpenPrimePostgresBackupFailed, exp_alerts: [] }
+      - { eval_time: 2h, alertname: OpenPrimePostgresBackupRetried, exp_alerts: [] }
+
+  # A Job created by hand with kubectl create job --from=cronjob (same owner)
+  # that fails: fires. A failed Job of another CronJob whose name shares the
+  # prefix, openprime-postgres-backup-verify: quiet.
+  - interval: 1h
+    input_series:
+      - series: 'kube_job_failed{namespace="openprime",job_name="openprime-postgres-backup-manual-1763380000",condition="true"}'
+        values: "1x5"
+      - series: 'kube_job_created{namespace="openprime",job_name="openprime-postgres-backup-manual-1763380000"}'
+        values: "0x5"
+      - series: 'kube_job_owner{namespace="openprime",job_name="openprime-postgres-backup-manual-1763380000",owner_kind="CronJob",owner_name="openprime-postgres-backup",owner_is_controller="true"}'
+        values: "1x5"
+      - series: 'kube_job_failed{namespace="openprime",job_name="openprime-postgres-backup-verify-29894520",condition="true"}'
+        values: "1x5"
+      - series: 'kube_job_created{namespace="openprime",job_name="openprime-postgres-backup-verify-29894520"}'
+        values: "0x5"
+      - series: 'kube_job_owner{namespace="openprime",job_name="openprime-postgres-backup-verify-29894520",owner_kind="CronJob",owner_name="openprime-postgres-backup-verify",owner_is_controller="true"}'
+        values: "1x5"
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: OpenPrimePostgresBackupFailed
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: openprime, job_name: openprime-postgres-backup-manual-1763380000 }
+            exp_annotations:
+              summary: The OpenPrime database backup failed.
+              description: "Backup Job openprime-postgres-backup-manual-1763380000 failed after all its retries, so this run's dump is not in S3. The reason is in the logs of its pods (containers dump and upload). Run it again with: kubectl -n openprime create job --from=cronjob/openprime-postgres-backup openprime-postgres-backup-manual-$(date +%s)"
+
+  # kube-state-metrics moves while a failed backup is alerting: the old pod's
+  # series stop at 2m, the new pod's start at 6m. The alert keeps firing
+  # through the gap and stays one alert while both pods' series are in the
+  # window.
+  - interval: 1m
+    input_series:
+      - series: 'kube_job_failed{namespace="openprime",job_name="openprime-postgres-backup-29893080",condition="true",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "1 1 1 stale"
+      - series: 'kube_job_created{namespace="openprime",job_name="openprime-postgres-backup-29893080",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "0 0 0 stale"
+      - series: 'kube_job_owner{namespace="openprime",job_name="openprime-postgres-backup-29893080",owner_kind="CronJob",owner_name="openprime-postgres-backup",owner_is_controller="true",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "1 1 1 stale"
+      - series: 'kube_job_failed{namespace="openprime",job_name="openprime-postgres-backup-29893080",condition="true",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x6 1x10"
+      - series: 'kube_job_created{namespace="openprime",job_name="openprime-postgres-backup-29893080",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x6 0x10"
+      - series: 'kube_job_owner{namespace="openprime",job_name="openprime-postgres-backup-29893080",owner_kind="CronJob",owner_name="openprime-postgres-backup",owner_is_controller="true",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x6 1x10"
+    alert_rule_test:
+      - eval_time: 4m # in the gap
+        alertname: OpenPrimePostgresBackupFailed
+        exp_alerts: &backup_failed_moved
+          - exp_labels: { severity: critical, namespace: openprime, job_name: openprime-postgres-backup-29893080 }
+            exp_annotations:
+              summary: The OpenPrime database backup failed.
+              description: "Backup Job openprime-postgres-backup-29893080 failed after all its retries, so this run's dump is not in S3. The reason is in the logs of its pods (containers dump and upload). Run it again with: kubectl -n openprime create job --from=cronjob/openprime-postgres-backup openprime-postgres-backup-manual-$(date +%s)"
+      - { eval_time: 8m, alertname: OpenPrimePostgresBackupFailed, exp_alerts: *backup_failed_moved }
+
+  # The same move for a Job that needed one retry: while the old and the new
+  # pod's series overlap, the failed attempt still counts once.
+  - interval: 1m
+    input_series:
+      - series: 'kube_job_status_failed{namespace="openprime",job_name="openprime-postgres-backup-29894520",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "1 1 1 stale"
+      - series: 'kube_job_complete{namespace="openprime",job_name="openprime-postgres-backup-29894520",condition="true",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "1 1 1 stale"
+      - series: 'kube_job_created{namespace="openprime",job_name="openprime-postgres-backup-29894520",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "0 0 0 stale"
+      - series: 'kube_job_owner{namespace="openprime",job_name="openprime-postgres-backup-29894520",owner_kind="CronJob",owner_name="openprime-postgres-backup",owner_is_controller="true",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "1 1 1 stale"
+      - series: 'kube_job_status_failed{namespace="openprime",job_name="openprime-postgres-backup-29894520",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x4 1x10"
+      - series: 'kube_job_complete{namespace="openprime",job_name="openprime-postgres-backup-29894520",condition="true",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x4 1x10"
+      - series: 'kube_job_created{namespace="openprime",job_name="openprime-postgres-backup-29894520",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x4 0x10"
+      - series: 'kube_job_owner{namespace="openprime",job_name="openprime-postgres-backup-29894520",owner_kind="CronJob",owner_name="openprime-postgres-backup",owner_is_controller="true",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x4 1x10"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OpenPrimePostgresBackupRetried
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: openprime, job_name: openprime-postgres-backup-29894520 }
+            exp_annotations:
+              summary: The OpenPrime database backup needed a retry.
+              description: "Backup Job openprime-postgres-backup-29894520 succeeded, but only after 1 failed attempt(s). The backup is in S3; the failed pods of the Job show what went wrong."
+
+  # --- OpenPrimePostgresBackupMissing -----------------------------------------
+  # Last success at t=0, nothing since: quiet at 25h, fires after 26h.
+  - interval: 1h
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="openprime",cronjob="openprime-postgres-backup"}'
+        values: "0x30"
+      - series: 'kube_cronjob_created{namespace="openprime",cronjob="openprime-postgres-backup"}'
+        values: "0x30"
+    alert_rule_test:
+      - { eval_time: 25h, alertname: OpenPrimePostgresBackupMissing, exp_alerts: [] }
+      - eval_time: 27h
+        alertname: OpenPrimePostgresBackupMissing
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: openprime, cronjob: openprime-postgres-backup }
+            exp_annotations:
+              summary: The OpenPrime database has no recent backup.
+              description: "No successful run of openprime-postgres-backup for 1d 3h 0m 0s (alert after 26h). Check the CronJob (suspended? schedule?) and its recent Jobs in the openprime namespace."
+
+  # A CronJob that has never succeeded (no last_successful_time at all): fires
+  # once it is older than 26h, not before.
+  - interval: 1h
+    input_series:
+      - series: 'kube_cronjob_created{namespace="openprime",cronjob="openprime-postgres-backup"}'
+        values: "0x30"
+    alert_rule_test:
+      - { eval_time: 20h, alertname: OpenPrimePostgresBackupMissing, exp_alerts: [] }
+      - eval_time: 27h
+        alertname: OpenPrimePostgresBackupMissing
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: openprime, cronjob: openprime-postgres-backup }
+            exp_annotations:
+              summary: The OpenPrime database has no recent backup.
+              description: "No successful run of openprime-postgres-backup for 1d 3h 0m 0s (alert after 26h). Check the CronJob (suspended? schedule?) and its recent Jobs in the openprime namespace."
+
+  # A backup every 24 hours: never fires.
+  - interval: 1h
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="openprime",cronjob="openprime-postgres-backup"}'
+        values: "0x23 86400x23 172800x23"
+      - series: 'kube_cronjob_created{namespace="openprime",cronjob="openprime-postgres-backup"}'
+        values: "0x70"
+    alert_rule_test:
+      - { eval_time: 47h, alertname: OpenPrimePostgresBackupMissing, exp_alerts: [] }
+      - { eval_time: 70h, alertname: OpenPrimePostgresBackupMissing, exp_alerts: [] }
+
+  # kube-state-metrics moves while the alert is firing (last success at t=0,
+  # 27h ago): the old pod's series stop at 27h05m, the new pod's start at
+  # 27h10m. It keeps firing through the gap.
+  - interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="openprime",cronjob="openprime-postgres-backup",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "0x1625 stale"
+      - series: 'kube_cronjob_created{namespace="openprime",cronjob="openprime-postgres-backup",job="kube-state-metrics",instance="10.0.0.1:8080"}'
+        values: "0x1625 stale"
+      - series: 'kube_cronjob_status_last_successful_time{namespace="openprime",cronjob="openprime-postgres-backup",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x1630 0x10"
+      - series: 'kube_cronjob_created{namespace="openprime",cronjob="openprime-postgres-backup",job="kube-state-metrics",instance="10.0.0.2:8080"}'
+        values: "_x1630 0x10"
+    alert_rule_test:
+      - eval_time: 1628m # in the gap
+        alertname: OpenPrimePostgresBackupMissing
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: openprime, cronjob: openprime-postgres-backup }
+            exp_annotations:
+              summary: The OpenPrime database has no recent backup.
+              description: "No successful run of openprime-postgres-backup for 1d 3h 8m 0s (alert after 26h). Check the CronJob (suspended? schedule?) and its recent Jobs in the openprime namespace."
