@@ -1,0 +1,54 @@
+# Trivy ignore file, read automatically by `trivy fs` and `trivy image`
+# (CI: .github/workflows/reusable-upstream-image-scan.yml).
+#
+# This repo builds no image. The images it scans are the upstream ones the
+# chart deploys (chart/values.yaml): postgres (image.*) and amazon/aws-cli
+# (backup.awsCliImage). Their findings can only be fixed by moving the chart to
+# a newer upstream tag/digest, so prefer that. Ignore only what cannot be fixed
+# that way yet.
+#
+# Every entry needs, directly above it, a comment with:
+#   - why it is acceptable (e.g. code path not reachable, fix not usable yet)
+#   - the ticket that tracks removing the entry
+# and an expiry date on the entry itself, so it is looked at again.
+#
+# No wildcards, no package-wide ignores, no entries without a CVE/GHSA id.
+
+# postgres:15.20-alpine, usr/local/bin/gosu (Go stdlib v1.24.6). gosu is never
+# executed by this chart: the image's entrypoint calls it only when started as
+# root (`if [ "$(id -u)" = '0' ]`), and the chart enforces runAsNonRoot with
+# runAsUser 999 on every container that uses this image (database and backup
+# dump). Upstream does not rebuild gosu for stdlib CVEs. Go stdlib ids only;
+# no other Go binary is in either image. OP-191
+CVE-2025-61726 exp:2027-02-28
+CVE-2025-61729 exp:2027-02-28
+CVE-2025-68121 exp:2027-02-28
+CVE-2026-25679 exp:2027-02-28
+CVE-2026-27145 exp:2027-02-28
+CVE-2026-32280 exp:2027-02-28
+CVE-2026-32281 exp:2027-02-28
+CVE-2026-32283 exp:2027-02-28
+CVE-2026-33811 exp:2027-02-28
+CVE-2026-33814 exp:2027-02-28
+CVE-2026-33818 exp:2027-02-28
+CVE-2026-39820 exp:2027-02-28
+CVE-2026-39821 exp:2027-02-28
+CVE-2026-39822 exp:2027-02-28
+CVE-2026-39836 exp:2027-02-28
+CVE-2026-42499 exp:2027-02-28
+CVE-2026-42504 exp:2027-02-28
+CVE-2026-56853 exp:2027-02-28
+CVE-2026-56858 exp:2027-02-28
+CVE-2026-56859 exp:2027-02-28
+CVE-2026-56860 exp:2027-02-28
+CVE-2026-56862 exp:2027-02-28
+CVE-2026-78667 exp:2027-02-28
+CVE-2026-78669 exp:2027-02-28
+CVE-2026-97031 exp:2027-02-28
+CVE-2026-111943 exp:2027-02-28
+
+# postgres:15.20-alpine, libxml2 2.13.9-r2 (fixed in Alpine 2.13.9-r3, not yet
+# in any postgres:15-alpine build). The server links libxml2 for the xml type
+# and XPath functions; OpenPrime's databases are not known to use them (not
+# verified). Short expiry: move to the next upstream rebuild instead. OP-191
+CVE-2026-86144 exp:2026-12-31

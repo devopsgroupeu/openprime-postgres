@@ -1,0 +1,207 @@
+name: Reusable Upstream Image Scan
+
+# This repo builds no image: the chart deploys upstream images (postgres and
+# amazon/aws-cli). This scans exactly the image references the chart renders,
+# plus the repo's lock files, and fails on fixable HIGH/CRITICAL findings.
+
+on:
+  workflow_call:
+    inputs:
+      chart-path:
+        required: false
+        type: string
+        default: chart
+        description: "Path to the chart"
+      helm-version:
+        required: false
+        type: string
+        default: v3.12.0
+        description: "Keep in sync with reusable-helm-publish.yml"
+
+jobs:
+  images:
+    name: List chart images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      images: ${{ steps.list.outputs.images }}
+    env:
+      CHART_PATH: ${{ inputs.chart-path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: ${{ inputs.helm-version }}
+
+      # Render with every chart/ci/*-values.yaml (all-features turns the backup
+      # CronJob on) and collect each distinct image: reference.
+      - name: List images
+        id: list
+        run: |
+          set -o pipefail
+          shopt -s nullglob
+          values_files=("${CHART_PATH}"/ci/*-values.yaml)
+          if [ ${#values_files[@]} -eq 0 ]; then
+            echo "::error::No ${CHART_PATH}/ci/*-values.yaml found; add at least one."
+            exit 1
+          fi
+          images=$(
+            for values in "${values_files[@]}"; do
+              helm template ci "${CHART_PATH}" -f "$values"
+            done \
+              | grep -E '^[[:space:]]+image:' \
+              | sed -E 's/^[[:space:]]+image:[[:space:]]*//; s/^"//; s/"$//' \
+              | sort -u \
+              | jq -R '{ref: ., name: (split("@")[0] | split(":")[0] | split("/") | last)}' \
+              | jq -sc .
+          )
+          if [ "$images" = "[]" ]; then
+            echo "::error::The chart rendered no image references."
+            exit 1
+          fi
+          echo "$images" | jq .
+          echo "images=${images}" >> "$GITHUB_OUTPUT"
+
+  fs:
+    name: Trivy repo scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # package-lock.json holds only devDependencies (the semantic-release
+      # toolchain), which Trivy skips by default, so this is empty today. It
+      # catches the first production dependency added to package.json.
+      - name: Trivy repo scan (dependencies)
+        id: trivy-fs
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: sarif
+          output: trivy-fs.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          limit-severities-for-sarif: true
+          exit-code: "1"
+
+      - name: Upload Trivy repo results
+        if: >-
+          always() && hashFiles('trivy-fs.sarif') != '' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Show repo findings
+        if: steps.trivy-fs.outcome == 'failure'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+          skip-setup-trivy: true
+
+      - name: Fail on vulnerabilities
+        if: steps.trivy-fs.outcome == 'failure'
+        run: |
+          echo "::error::Trivy found fixable HIGH/CRITICAL vulnerabilities in the repo's dependencies (or the scan failed to run)."
+          exit 1
+
+  image:
+    name: Trivy ${{ matrix.image.name }}
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.images.outputs.images) }}
+    steps:
+      # For .trivyignore, which Trivy reads from the working directory.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The runner is linux/amd64, so Trivy pulls the amd64 image of the index;
+      # the clusters run amd64 too (not verified for every environment).
+      - name: Trivy image scan
+        id: trivy-image
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ matrix.image.ref }}
+          scanners: vuln
+          format: sarif
+          output: trivy-image.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          limit-severities-for-sarif: true
+          exit-code: "1"
+
+      - name: Upload Trivy image results
+        if: >-
+          always() && hashFiles('trivy-image.sarif') != '' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image-${{ matrix.image.name }}
+
+      - name: Show image findings
+        if: steps.trivy-image.outcome == 'failure'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ matrix.image.ref }}
+          scanners: vuln
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+          skip-setup-trivy: true
+
+      - name: Fail on vulnerabilities
+        if: steps.trivy-image.outcome == 'failure'
+        env:
+          IMAGE_REF: ${{ matrix.image.ref }}
+        run: |
+          echo "::error::Trivy found fixable HIGH/CRITICAL vulnerabilities in ${IMAGE_REF} (or the scan failed to run). Move chart/values.yaml to a newer upstream tag and digest, or triage in .trivyignore."
+          exit 1
+
+  # One stable check name for branch protection; the matrix job names change
+  # with the image list.
+  result:
+    name: Result
+    if: always()
+    needs: [images, fs, image]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Check scan results
+        env:
+          IMAGES: ${{ needs.images.result }}
+          FS: ${{ needs.fs.result }}
+          IMAGE: ${{ needs.image.result }}
+        run: |
+          echo "images: ${IMAGES}, repo scan: ${FS}, image scans: ${IMAGE}"
+          if [ "$IMAGES" != "success" ] || [ "$FS" != "success" ] || [ "$IMAGE" != "success" ]; then
+            echo "::error::Upstream image scan failed."
+            exit 1
+          fi

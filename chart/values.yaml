@@ -20,7 +20,10 @@ image:
   # The floating 15-alpine swapped the server binary on whichever restart
   # happened to pull. Stay on Alpine: changing libc under an existing data
   # directory changes collation order, which silently corrupts text indexes.
-  tag: "15.19-alpine"
+  # Pinned by digest too (OP-191, H96): a tag can be re-pushed, the digest is
+  # what was scanned. Bump tag, digest and appVersion together; CI scans the new
+  # reference before it can merge.
+  tag: "15.20-alpine@sha256:e18480a22d6e48f4d816a6696769b1ec09ac73a824c5649e49c7d8b684913f3d"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -268,7 +271,8 @@ backup:
   # (10s, 20s, 40s, ...): 3 rides out about a minute of database or S3
   # unavailability. 0 disables retries.
   backoffLimit: 3
-  awsCliImage: "amazon/aws-cli:2.32.9"
+  # Pinned by digest (OP-191, H96); bump tag and digest together.
+  awsCliImage: "amazon/aws-cli:2.42.1@sha256:b0102d2269f87d8531d931c1a59e248101ace586886e6c077058d94c1c37b846"
   serviceAccount:
     # e.g. eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<backup-role>
     annotations: {}
