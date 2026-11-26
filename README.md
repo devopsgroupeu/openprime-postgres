@@ -23,7 +23,7 @@ See `chart/values.yaml` for all available configuration options.
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `replicaCount` | Number of replicas | `1` |
-| `image.tag` | PostgreSQL image tag, kept equal to `appVersion` | `15.19-alpine` |
+| `image.tag` | PostgreSQL image tag, kept equal to `appVersion` | `15.20-alpine@sha256:…` (digest-pinned) |
 | `persistence.size` | Storage size | `10Gi` |
 | `postgresql.databases` | Databases to create | `openprime`, `keycloak` |
 
@@ -151,6 +151,23 @@ PostgreSQL will be available at localhost:5432
 cd ../openprime-local-testing
 npm run db:shell
 ```
+
+## Supply chain
+
+This repository builds no container image. The chart deploys two upstream images, both pinned by tag **and digest** in `chart/values.yaml`:
+
+- `postgres:<version>-alpine` (database, and the backup dump step)
+- `amazon/aws-cli` (backup upload, only when `backup.enabled`)
+
+CI renders the chart and scans every image reference it produces with Trivy, together with the repository's lock file. A fixable HIGH or CRITICAL vulnerability fails the check. The scan runs on every pull request and before every release (a failing scan cuts no version). Accepted findings are listed with a reason, a ticket and an expiry in `.trivyignore`.
+
+To move to a newer upstream image, change tag and digest together (and `appVersion` for postgres):
+
+    docker buildx imagetools inspect postgres:<version>-alpine   # "Digest:" line
+
+The chart itself (`oci://ghcr.io/devopsgroupeu/helm/openprime-postgres`) is not signed, and there is no SBOM. Neither image is built here.
+
+The chart is also checked with `helm lint --strict` and kubeconform against `chart/ci/*-values.yaml`. CodeQL analyses the GitHub Actions workflows.
 
 ## Related Repositories
 

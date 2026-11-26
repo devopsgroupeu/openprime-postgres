@@ -1,0 +1,26 @@
+# CI only: every optional template switched on, so kubeconform validates all of
+# them. Inline passwords (instead of existingSecret) make the chart render its
+# own Secret (templates/secret.yaml). Dummy values, never used by a cluster.
+auth:
+  secrets:
+    postgresPassword: ci-postgres
+    openprimePassword: ci-openprime
+    keycloakPassword: ci-keycloak
+  autoSyncPasswords: true
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 0
+networkPolicy:
+  enabled: true
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+backup:
+  enabled: true
+  bucket: ci-backup-bucket
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/ci-backup
